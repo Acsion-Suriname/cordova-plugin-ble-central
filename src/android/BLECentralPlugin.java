@@ -860,7 +860,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
         @Override
         public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
             super.onConnectionStateChange(device, status, newState);
-            Log.d(TAG, "onConnectionStateChange status=" + status + "->" + newState);
+            LOG.d(TAG, "onConnectionStateChange status=" + status + "->" + newState);
 
             if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 registeredDevices.remove(device);
@@ -870,14 +870,14 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
 
         @Override
         public void onServiceAdded(int status, BluetoothGattService service) {
-            Log.d(TAG, "onServiceAdded status=" + service + "->" + service);
+            LOG.d(TAG, "onServiceAdded status=" + service + "->" + service);
             super.onServiceAdded(status, service);
         }
 
         @Override
         public void onCharacteristicReadRequest(BluetoothDevice device, int requestId, int offset, BluetoothGattCharacteristic characteristic) {
             super.onCharacteristicReadRequest(device, requestId, offset, characteristic);
-            Log.d(TAG, "onCharacteristicReadRequest requestId=" + requestId + " offset=" + offset);
+            LOG.d(TAG, "onCharacteristicReadRequest requestId=" + requestId + " offset=" + offset);
 
             gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, characteristic.getValue());
         }
@@ -885,7 +885,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
         @Override
         public void onCharacteristicWriteRequest(BluetoothDevice device, int requestId, BluetoothGattCharacteristic characteristic, boolean preparedWrite, boolean responseNeeded, int offset, byte[] value) {
             super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value);
-            Log.d(TAG, "onCharacteristicWriteRequest characteristic=" + characteristic.getUuid() + " value=" + Arrays.toString(value));
+            LOG.d(TAG, "onCharacteristicWriteRequest characteristic=" + characteristic.getUuid() + " value=" + Arrays.toString(value));
 
             if (characteristicValueChangedCallback != null) {
                 try {
@@ -898,7 +898,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                     result.setKeepCallback(true);
                     characteristicValueChangedCallback.sendPluginResult(result);
                 } catch (JSONException e) {
-                    Log.e(TAG, "JSON encoding failed in onCharacteristicWriteRequest", e);
+                    LOG.e(TAG, "JSON encoding failed in onCharacteristicWriteRequest", e);
                 }
             }
 
@@ -911,21 +911,21 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
         @Override
         public void onNotificationSent(BluetoothDevice device, int status) {
             super.onNotificationSent(device, status);
-            Log.d(TAG, "onNotificationSent device=" + device + " status=" + status);
+            LOG.d(TAG, "onNotificationSent device=" + device + " status=" + status);
         }
 
         @Override
         public void onDescriptorWriteRequest(BluetoothDevice device, int requestId, BluetoothGattDescriptor descriptor, boolean preparedWrite, boolean responseNeeded, int offset, byte[] value) {
             super.onDescriptorWriteRequest(device, requestId, descriptor, preparedWrite, responseNeeded, offset, value);
-            Log.d(TAG, "onDescriptorWriteRequest");
-            Log.d(TAG, Arrays.toString(value));
+            LOG.d(TAG, "onDescriptorWriteRequest");
+            LOG.d(TAG, Arrays.toString(value));
 
             if (CLIENT_CHARACTERISTIC_CONFIGURATION_UUID.equals(descriptor.getUuid())) {
                 if (Arrays.equals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, value)) {
-                    Log.d(TAG, "Subscribe device to notifications: " + device);
+                    LOG.d(TAG, "Subscribe device to notifications: " + device);
                     registeredDevices.add(device);
                 } else if (Arrays.equals(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE, value)) {
-                    Log.d(TAG, "Unsubscribe device from notifications: " + device);
+                    LOG.d(TAG, "Unsubscribe device from notifications: " + device);
                     registeredDevices.remove(device);
                 }
 
@@ -938,7 +938,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                 }
             } else {
                 // TODO allow other descriptors to be written
-                Log.w(TAG, "Unknown descriptor write request");
+                LOG.w(TAG, "Unknown descriptor write request");
                 if (responseNeeded) {
                     gattServer.sendResponse(device,
                             requestId,
@@ -953,7 +953,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
         @Override
         public void onDescriptorReadRequest(BluetoothDevice device, int requestId, int offset, BluetoothGattDescriptor descriptor) {
             super.onDescriptorReadRequest(device, requestId, offset, descriptor);
-            Log.d(TAG, "onDescriptorReadRequest device=" + device + " descriptor=" + descriptor.getUuid());
+            LOG.d(TAG, "onDescriptorReadRequest device=" + device + " descriptor=" + descriptor.getUuid());
 
             gattServer.sendResponse(device,
                             requestId,
@@ -966,7 +966,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
         @Override
         public void onExecuteWrite(BluetoothDevice device, int requestId, boolean execute) {
             super.onExecuteWrite(device, requestId, execute);
-            Log.d(TAG, "onExecuteWrite");
+            LOG.d(TAG, "onExecuteWrite");
         }
 
     };
