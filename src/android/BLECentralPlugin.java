@@ -103,11 +103,12 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
     // 0x2902 https://www.bluetooth.com/specifications/gatt/descriptors
     private static final UUID CLIENT_CHARACTERISTIC_CONFIGURATION_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
-    private static final String SETTINGS = "showBluetoothSettings";
-    private static final String ENABLE = "enable";
-
     private static final String START_STATE_NOTIFICATIONS = "startStateNotifications";
     private static final String STOP_STATE_NOTIFICATIONS = "stopStateNotifications";
+    private static final String SET_BLUETOOTH_STATE_CHANGED_LISTENER = "setBluetoothStateChangedListener";
+
+    private static final String SETTINGS = "showBluetoothSettings";
+    private static final String ENABLE = "enable";
 
     // callbacks
     CallbackContext discoverCallback;
@@ -329,6 +330,114 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                 callbackContext.error("Not connected.");
             }
 
+        } else if (action.equals(SET_CHARACTERISTIC_VALUE_CHANGED_LISTENER)) {
+
+            characteristicValueChangedCallback = callbackContext;
+
+        } else if (action.equals(SET_BLUETOOTH_STATE_CHANGED_LISTENER)) {
+
+            if (this.stateCallback != null) {
+                callbackContext.error("State callback already registered.");
+            } else {
+                this.stateCallback = callbackContext;
+                addStateListener();
+                sendBluetoothStateChange(bluetoothAdapter.getState());
+            }
+
+        } else if (action.equals(CREATE_SERVICE)) {
+
+            UUID serviceUUID = uuidFromString(args.getString(0));
+
+            BluetoothGattService service = new BluetoothGattService(
+                    serviceUUID,
+                    BluetoothGattService.SERVICE_TYPE_PRIMARY);
+
+            services.put(serviceUUID, service);
+
+            callbackContext.success();
+
+        } else if (action.contentEquals(ADD_CHARACTERISTIC)) {
+
+            UUID serviceUUID = uuidFromString(args.getString(0));
+            UUID characteristicUUID = uuidFromString(args.getString(1));
+            int properties = args.getInt(2);
+            int permissions = args.getInt(3);
+
+            BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(
+                    characteristicUUID,
+                    properties,
+                    permissions);
+            BluetoothGattService service = services.get(serviceUUID);
+            service.addCharacteristic(characteristic);
+
+            // If notify or indicate, we need to add the 2902 descriptor
+            if (isNotify(characteristic) || isIndicate(characteristic)) {
+                characteristic.addDescriptor(createClientCharacteristicConfigurationDescriptor());
+            }
+
+            callbackContext.success();
+
+        } else if (action.equals(PUBLISH_SERVICE)) {
+
+            UUID serviceUUID = uuidFromString(args.getString(0));
+            BluetoothGattService service = services.get(serviceUUID);
+
+            if (service == null) {
+                callbackContext.error("Service " + serviceUUID + " not found");
+                return /* validAction */ true; // stop processing because of error
+            }
+
+            boolean success = gattServer.addService(service);
+
+            if (success) {
+                callbackContext.success();
+            } else {
+                callbackContext.error("Error adding " + serviceUUID + " to GATT Server");
+            }
+
+        } else if (action.equals(START_ADVERTISING)) {
+
+            UUID serviceUUID = uuidFromString(args.getString(0));
+            String advertisedName = args.getString(1);
+
+            LOG.w(TAG, "App requested to advertise name " + advertisedName + " but this feature is not currently supported by the Android version of the plugin");
+
+            BluetoothLeAdvertiser bluetoothLeAdvertiser = bluetoothAdapter.getBluetoothLeAdvertiser();
+
+            AdvertiseData advertisementData = getAdvertisementData(serviceUUID);
+            AdvertiseSettings advertiseSettings = getAdvertiseSettings();
+
+            bluetoothLeAdvertiser.startAdvertising(advertiseSettings, advertisementData, advertiseCallback);
+
+            advertisingStartedCallback = callbackContext;
+
+        } else if (action.equals(SET_CHARACTERISTIC_VALUE)) {
+
+            UUID serviceUUID = uuidFromString(args.getString(0));
+            UUID characteristicUUID = uuidFromString(args.getString(1));
+            byte[] value = args.getArrayBuffer(2);
+
+            BluetoothGattService service = services.get(serviceUUID);
+            if (service == null) {
+                callbackContext.error("Service " + serviceUUID + " not found");
+                return /* validAction */ true; // stop processing because of error
+            }
+
+            BluetoothGattCharacteristic characteristic = service.getCharacteristic(characteristicUUID);
+
+            if (characteristic == null) {
+                callbackContext.error("Characteristic " + characteristicUUID + " not found on service " + serviceUUID);
+                return /* validAction */ true; // stop processing because of error
+            }
+
+            characteristic.setValue(value);
+
+            if (isNotify(characteristic) || isIndicate(characteristic)) {
+                notifyRegisteredDevices(characteristic);
+            }
+
+            callbackContext.success();
+
         } else if (action.equals(SETTINGS)) {
 
             Intent intent = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
@@ -453,7 +562,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
             try {
                 webView.getContext().unregisterReceiver(this.stateReceiver);
             } catch (Exception e) {
-                LOG.e(TAG, "Error unregistering state receiver: " + e.getMessage(), e);
+                LOG.e(TAG, "Error un-registering state receiver: " + e.getMessage(), e);
             }
         }
         this.stateCallback = null;
@@ -970,8 +1079,69 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
 
     };
 
+    // https://github.com/don/uribeacon/blob/58c31cf28d06a80880b0ed46b005204821fd623f/beacons/android/app/src/main/java/org/uribeacon/example/beacon/UriBeaconAdvertiserActivity.java
+    private AdvertiseData getAdvertisementData(UUID serviceUuid) {
+        AdvertiseData.Builder builder = new AdvertiseData.Builder();
+        builder.setIncludeTxPowerLevel(false); // reserve advertising space for URI
+
+        builder.addServiceUuid(new ParcelUuid(serviceUuid)); // TODO accept multiple services in the future
+        builder.setIncludeDeviceName(true);
+        return builder.build();
+    }
+
+    private AdvertiseSettings getAdvertiseSettings() {
+        AdvertiseSettings.Builder builder = new AdvertiseSettings.Builder();
+        //builder.setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED);
+        builder.setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY);
+        builder.setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH);
+        builder.setConnectable(true);
+
+        return builder.build();
+    }
+
+    private AdvertiseCallback advertiseCallback = new AdvertiseCallback() {
+        @Override
+        public void onStartSuccess(AdvertiseSettings settingsInEffect) {
+            super.onStartSuccess(settingsInEffect);
+            LOG.d(TAG, "onStartSuccess");
+            if (advertisingStartedCallback != null) {
+                advertisingStartedCallback.success();
+            }
+        }
+
+        @Override
+        public void onStartFailure(int errorCode) {
+            super.onStartFailure(errorCode);
+            LOG.d(TAG, "onStartFailure");
+            if (advertisingStartedCallback != null) {
+                advertisingStartedCallback.error(errorCode);
+            }
+        }
+    };
+
+    private void notifyRegisteredDevices(BluetoothGattCharacteristic characteristic) {
+        boolean confirm = isIndicate(characteristic);
+
+        for (BluetoothDevice device : registeredDevices) {
+            gattServer.notifyCharacteristicChanged(device, characteristic, confirm);
+        }
+    }
+
     private UUID uuidFromString(String uuid) {
         return UUIDHelper.uuidFromString(uuid);
+    }
+
+    private boolean isNotify(BluetoothGattCharacteristic characteristic) {
+        return ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0);
+    }
+
+    private boolean isIndicate(BluetoothGattCharacteristic characteristic) {
+        return ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0);
+    }
+
+    private BluetoothGattDescriptor createClientCharacteristicConfigurationDescriptor() {
+        return new BluetoothGattDescriptor(CLIENT_CHARACTERISTIC_CONFIGURATION_UUID,
+                BluetoothGattDescriptor.PERMISSION_READ | BluetoothGattDescriptor.PERMISSION_WRITE);
     }
 
     /**
