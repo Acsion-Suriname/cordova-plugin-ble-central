@@ -20,14 +20,24 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.BluetoothGattServer;
+import android.bluetooth.BluetoothGattServerCallback;
+import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
+import android.bluetooth.le.AdvertiseCallback;
+import android.bluetooth.le.AdvertiseData;
+import android.bluetooth.le.AdvertiseSettings;
+import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Build;
+import android.os.ParcelUuid;
 
 import android.provider.Settings;
 import org.apache.cordova.CallbackContext;
@@ -81,6 +91,18 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
     private static final String IS_LOCATION_ENABLED = "isLocationEnabled";
     private static final String IS_CONNECTED  = "isConnected";
 
+    private static final String CREATE_SERVICE = "createService";
+    private static final String CREATE_SERVICE_FROM_JSON = "createServiceFromJSON";
+    private static final String ADD_CHARACTERISTIC = "addCharacteristic";
+    private static final String PUBLISH_SERVICE = "publishService";
+    private static final String START_ADVERTISING = "startAdvertising";
+    private static final String SET_CHARACTERISTIC_VALUE = "setCharacteristicValue";
+
+    private static final String SET_CHARACTERISTIC_VALUE_CHANGED_LISTENER = "setCharacteristicValueChangedListener";
+
+    // 0x2902 https://www.bluetooth.com/specifications/gatt/descriptors
+    private static final UUID CLIENT_CHARACTERISTIC_CONFIGURATION_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+
     private static final String SETTINGS = "showBluetoothSettings";
     private static final String ENABLE = "enable";
 
@@ -90,14 +112,19 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
     // callbacks
     CallbackContext discoverCallback;
     private CallbackContext enableBluetoothCallback;
+    private CallbackContext characteristicValueChangedCallback;
+    private CallbackContext advertisingStartedCallback;
 
     private static final String TAG = "BLEPlugin";
     private static final int REQUEST_ENABLE_BLUETOOTH = 1;
 
-    BluetoothAdapter bluetoothAdapter;
+    private BluetoothAdapter bluetoothAdapter;
+    private BluetoothGattServer gattServer;
 
     // key is the MAC Address
-    Map<String, Peripheral> peripherals = new LinkedHashMap<String, Peripheral>();
+    private Map<String, Peripheral> peripherals = new LinkedHashMap<String, Peripheral>();
+    private Map<UUID, BluetoothGattService> services = new HashMap<>();
+    private Set<BluetoothDevice> registeredDevices = new HashSet<>();
 
     // scan options
     boolean reportDuplicates = false;
@@ -138,12 +165,29 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                                             .hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) &&
                                             Build.VERSION.SDK_INT >= 18;
             if (!hardwareSupportsBLE) {
-              LOG.w(TAG, "This hardware does not support Bluetooth Low Energy.");
-              callbackContext.error("This hardware does not support Bluetooth Low Energy.");
-              return false;
+                LOG.e(TAG, "This hardware does not support Bluetooth Low Energy");
+                callbackContext.error("This hardware does not support Bluetooth Low Energy");
+                return false;
             }
+
             BluetoothManager bluetoothManager = (BluetoothManager) activity.getSystemService(Context.BLUETOOTH_SERVICE);
+            if (bluetoothManager == null) {
+                LOG.e(TAG, "bluetoothManager is null");
+                callbackContext.error("Unable to get the Bluetooth Manager");
+                return false;
+            }
             bluetoothAdapter = bluetoothManager.getAdapter();
+
+            boolean hardwareSupportsPeripherals = bluetoothAdapter.isMultipleAdvertisementSupported();
+            if (!hardwareSupportsPeripherals) {
+                String errorMessage = "This hardware does not support creating Bluetooth Low Energy peripherals";
+                LOG.e(TAG, errorMessage);
+                callbackContext.error(errorMessage);
+                return false;
+            }
+            
+            gattServer = bluetoothManager.openGattServer(cordova.getContext(), gattServerCallback);
+
         }
 
         boolean validAction = true;
@@ -810,6 +854,122 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                 break;
         }
     }
+
+
+    private BluetoothGattServerCallback gattServerCallback = new BluetoothGattServerCallback() {
+        @Override
+        public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
+            super.onConnectionStateChange(device, status, newState);
+            Log.d(TAG, "onConnectionStateChange status=" + status + "->" + newState);
+
+            if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                registeredDevices.remove(device);
+            }
+
+        }
+
+        @Override
+        public void onServiceAdded(int status, BluetoothGattService service) {
+            Log.d(TAG, "onServiceAdded status=" + service + "->" + service);
+            super.onServiceAdded(status, service);
+        }
+
+        @Override
+        public void onCharacteristicReadRequest(BluetoothDevice device, int requestId, int offset, BluetoothGattCharacteristic characteristic) {
+            super.onCharacteristicReadRequest(device, requestId, offset, characteristic);
+            Log.d(TAG, "onCharacteristicReadRequest requestId=" + requestId + " offset=" + offset);
+
+            gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, characteristic.getValue());
+        }
+
+        @Override
+        public void onCharacteristicWriteRequest(BluetoothDevice device, int requestId, BluetoothGattCharacteristic characteristic, boolean preparedWrite, boolean responseNeeded, int offset, byte[] value) {
+            super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value);
+            Log.d(TAG, "onCharacteristicWriteRequest characteristic=" + characteristic.getUuid() + " value=" + Arrays.toString(value));
+
+            if (characteristicValueChangedCallback != null) {
+                try {
+                    JSONObject message = new JSONObject();
+                    message.put("service", characteristic.getService().getUuid().toString());
+                    message.put("characteristic", characteristic.getUuid().toString());
+                    message.put("value", byteArrayToJSON(value));
+
+                    PluginResult result = new PluginResult(PluginResult.Status.OK, message);
+                    result.setKeepCallback(true);
+                    characteristicValueChangedCallback.sendPluginResult(result);
+                } catch (JSONException e) {
+                    Log.e(TAG, "JSON encoding failed in onCharacteristicWriteRequest", e);
+                }
+            }
+
+            if (responseNeeded) {
+                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value);
+            }
+
+        }
+
+        @Override
+        public void onNotificationSent(BluetoothDevice device, int status) {
+            super.onNotificationSent(device, status);
+            Log.d(TAG, "onNotificationSent device=" + device + " status=" + status);
+        }
+
+        @Override
+        public void onDescriptorWriteRequest(BluetoothDevice device, int requestId, BluetoothGattDescriptor descriptor, boolean preparedWrite, boolean responseNeeded, int offset, byte[] value) {
+            super.onDescriptorWriteRequest(device, requestId, descriptor, preparedWrite, responseNeeded, offset, value);
+            Log.d(TAG, "onDescriptorWriteRequest");
+            Log.d(TAG, Arrays.toString(value));
+
+            if (CLIENT_CHARACTERISTIC_CONFIGURATION_UUID.equals(descriptor.getUuid())) {
+                if (Arrays.equals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE, value)) {
+                    Log.d(TAG, "Subscribe device to notifications: " + device);
+                    registeredDevices.add(device);
+                } else if (Arrays.equals(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE, value)) {
+                    Log.d(TAG, "Unsubscribe device from notifications: " + device);
+                    registeredDevices.remove(device);
+                }
+
+                if (responseNeeded) {
+                    gattServer.sendResponse(device,
+                            requestId,
+                            BluetoothGatt.GATT_SUCCESS,
+                            0,
+                            null);
+                }
+            } else {
+                // TODO allow other descriptors to be written
+                Log.w(TAG, "Unknown descriptor write request");
+                if (responseNeeded) {
+                    gattServer.sendResponse(device,
+                            requestId,
+                            BluetoothGatt.GATT_FAILURE,
+                            0,
+                            null);
+                }
+            }
+
+        }
+
+        @Override
+        public void onDescriptorReadRequest(BluetoothDevice device, int requestId, int offset, BluetoothGattDescriptor descriptor) {
+            super.onDescriptorReadRequest(device, requestId, offset, descriptor);
+            Log.d(TAG, "onDescriptorReadRequest device=" + device + " descriptor=" + descriptor.getUuid());
+
+            gattServer.sendResponse(device,
+                            requestId,
+                            BluetoothGatt.GATT_SUCCESS,
+                            0,
+                            descriptor.getValue());
+
+        }
+
+        @Override
+        public void onExecuteWrite(BluetoothDevice device, int requestId, boolean execute) {
+            super.onExecuteWrite(device, requestId, execute);
+            Log.d(TAG, "onExecuteWrite");
+        }
+
+    };
 
     private UUID uuidFromString(String uuid) {
         return UUIDHelper.uuidFromString(uuid);
