@@ -855,7 +855,6 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
         }
     }
 
-
     private BluetoothGattServerCallback gattServerCallback = new BluetoothGattServerCallback() {
         @Override
         public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
@@ -892,7 +891,7 @@ public class BLECentralPlugin extends CordovaPlugin implements BluetoothAdapter.
                     JSONObject message = new JSONObject();
                     message.put("service", characteristic.getService().getUuid().toString());
                     message.put("characteristic", characteristic.getUuid().toString());
-                    message.put("value", byteArrayToJSON(value));
+                    message.put("value", Peripheral.byteArrayToJSON(value));
 
                     PluginResult result = new PluginResult(PluginResult.Status.OK, message);
                     result.setKeepCallback(true);
