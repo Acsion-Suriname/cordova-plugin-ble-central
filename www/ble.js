@@ -66,11 +66,8 @@ module.exports = {
         WRITE_ENCRYPTION_REQUIRED: cordova.platformId === 'ios' ? 0x08: 0x20
     },
 
-    createService: function(uuid) {
-
-        return new Promise(function(resolve, reject) {
-             cordova.exec(resolve, reject, 'BLE', 'createService', [uuid]);
-        });
+    createService: function(uuid, success, failure) {
+        cordova.exec(success, failure, 'BLE', 'createService', [uuid]);     
     },
 
     scan: function (services, seconds, success, failure) {
@@ -272,6 +269,12 @@ module.exports.withPromises = {
     connect: module.exports.connect,
     startNotification: module.exports.startNotification,
     startStateNotifications: module.exports.startStateNotifications,
+
+    createService: function(uuid) {
+        return new Promise(function(resolve, reject) {
+            module.exports.createService(uuid, resolve, reject);
+        });
+    },
 
     stopScan: function() {
         return new Promise(function(resolve, reject) {
